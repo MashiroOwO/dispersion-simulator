@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>高斯煙流擴散模擬器</title>
+    <title>高斯煙流擴散模擬器 (進階版)</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -29,7 +29,7 @@
             padding: 20px;
             border-radius: 10px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            max-width: 900px;
+            max-width: 950px;
             width: 100%;
         }
         .controls {
@@ -70,7 +70,7 @@
         .canvas-container {
             position: relative;
             width: 100%;
-            height: 400px;
+            height: 450px; /* 增加高度以容納更高的煙囪與圖表 */
             background: linear-gradient(to bottom, #87CEEB 0%, #e0f6ff 100%);
             border: 1px solid #bdc3c7;
             border-radius: 4px;
@@ -85,8 +85,9 @@
             position: absolute;
             bottom: 0;
             width: 100%;
-            height: 20px;
+            height: 25px;
             background-color: #8b5a2b;
+            border-top: 2px solid #5c3a21;
         }
         .legend {
             margin-top: 15px;
@@ -95,9 +96,9 @@
             font-size: 13px;
         }
         .color-bar {
-            width: 200px;
+            width: 250px;
             height: 15px;
-            background: linear-gradient(to right, rgba(0,0,255,0), blue, lime, yellow, red);
+            background: linear-gradient(to right, rgba(0,0,255,0), blue, cyan, lime, yellow, red);
             margin: 0 10px;
             border: 1px solid #ccc;
         }
@@ -105,46 +106,46 @@
 </head>
 <body>
 
-    <h1>高斯煙流擴散模擬器 (2D 側面圖)</h1>
-    <p class="subtitle">即時模擬 ISCST3 模式中的風速、煙囪高度與穩定度對污染物濃度的影響</p>
+    <h1>高斯煙流擴散模擬器 (量化進階版)</h1>
+    <p class="subtitle">視覺化呈現污染濃度與擴散距離分布，支援高負載參數模擬</p>
 
     <div class="container">
         <div class="controls">
             <div class="control-group">
                 <label>風速 (<span id="windVal" class="val-display">3</span> m/s)
-                    <input type="range" id="wind" min="1" max="15" value="3" step="0.5">
+                    <input type="range" id="wind" min="1" max="30" value="3" step="0.5">
                 </label>
             </div>
             <div class="control-group">
                 <label>煙囪高度 (<span id="stackHVal" class="val-display">50</span> m)
-                    <input type="range" id="stackH" min="10" max="150" value="50" step="1">
+                    <input type="range" id="stackH" min="10" max="300" value="50" step="1">
                 </label>
             </div>
             <div class="control-group">
                 <label>排放速率 (<span id="rateVal" class="val-display">100</span> g/s)
-                    <input type="range" id="rate" min="10" max="500" value="100" step="10">
+                    <input type="range" id="rate" min="10" max="1000" value="100" step="10">
                 </label>
             </div>
             <div class="control-group">
                 <label>大氣穩定度
                     <select id="stability">
-                        <option value="unstable">不穩定 (Unstable - 擴散快)</option>
-                        <option value="neutral" selected>中性 (Neutral - 一般)</option>
-                        <option value="stable">穩定 (Stable - 擴散慢)</option>
+                        <option value="unstable">不穩定 (Unstable - 垂直擴散快)</option>
+                        <option value="neutral" selected>中性 (Neutral - 一般狀態)</option>
+                        <option value="stable">穩定 (Stable - 容易蓄積)</option>
                     </select>
                 </label>
             </div>
         </div>
 
         <div class="canvas-container">
-            <canvas id="plumeCanvas" width="800" height="400"></canvas>
+            <canvas id="plumeCanvas" width="900" height="450"></canvas>
             <div class="ground"></div>
         </div>
         
         <div class="legend">
-            <span>低濃度 (0)</span>
+            <span>低濃度 (邊緣擴散)</span>
             <div class="color-bar"></div>
-            <span>高濃度</span>
+            <span>高濃度 (煙流核心)</span>
         </div>
     </div>
 
@@ -152,7 +153,6 @@
         const canvas = document.getElementById('plumeCanvas');
         const ctx = canvas.getContext('2d');
 
-        // UI 元素
         const windInput = document.getElementById('wind');
         const stackHInput = document.getElementById('stackH');
         const rateInput = document.getElementById('rate');
@@ -162,100 +162,130 @@
         const stackHVal = document.getElementById('stackHVal');
         const rateVal = document.getElementById('rateVal');
 
-        // 物理空間設定 (X軸：下風處 0~2000m，Z軸：高度 0~200m)
-        const maxDistX = 2000; 
-        const maxDistZ = 200;  
+        // 擴大物理空間以容納加倍的數值
+        const maxDistX = 3000; // X軸拉長至 3000 公尺
+        const maxDistZ = 400;  // Z軸拉高至 400 公尺 (以容納300m煙囪)
 
         function drawPlume() {
-            // 取得當前參數
             const u = parseFloat(windInput.value);
             const H = parseFloat(stackHInput.value);
             const Q = parseFloat(rateInput.value);
             const stability = stabInput.value;
 
-            // 清空畫布
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 設定擴散參數 (簡化的 Pasquill-Gifford 擴散係數)
             let a, b, c, d;
             if (stability === 'unstable') {
-                a = 0.22; b = 0.5; // Sigma Y
-                c = 0.20; d = 0.5; // Sigma Z
+                a = 0.22; b = 0.5; 
+                c = 0.20; d = 0.5; 
             } else if (stability === 'neutral') {
                 a = 0.11; b = 0.5;
                 c = 0.08; d = 0.5;
-            } else { // stable
+            } else { 
                 a = 0.06; b = 0.5;
                 c = 0.03; d = 0.5;
             }
 
-            // 創建影像數據以進行高效能像素繪製
             const imgData = ctx.createImageData(canvas.width, canvas.height);
             const data = imgData.data;
 
-            // 迴圈遍歷畫布的每個像素
             for (let px = 0; px < canvas.width; px++) {
-                // 將像素 X 轉換為實際距離 (加入 10m 避免原點數學無限大)
                 let x = (px / canvas.width) * maxDistX + 10; 
-                
-                // 計算此距離的擴散係數 Sigma Y 與 Sigma Z
-                let sigmaY = a * Math.pow(x, 0.894); 
-                let sigmaZ = c * Math.pow(x, 0.894); 
-
-                // 為了視覺效果，稍微放大擴散參數
-                sigmaY *= 2; 
-                sigmaZ *= 2;
+                let sigmaY = a * Math.pow(x, 0.894) * 2; 
+                let sigmaZ = c * Math.pow(x, 0.894) * 2; 
 
                 for (let py = 0; py < canvas.height; py++) {
-                    // 將像素 Y 轉換為實際高度 (底部為 0)
                     let z = ((canvas.height - py) / canvas.height) * maxDistZ;
 
-                    // 高斯煙流中心線濃度公式 (包含地表反射項)
-                    // C = [Q / (2 * PI * u * Sy * Sz)] * [ exp(-0.5*((z-H)/Sz)^2) + exp(-0.5*((z+H)/Sz)^2) ]
                     let coef = Q / (2 * Math.PI * u * sigmaY * sigmaZ);
                     let term1 = Math.exp(-0.5 * Math.pow((z - H) / sigmaZ, 2));
-                    let term2 = Math.exp(-0.5 * Math.pow((z + H) / sigmaZ, 2)); // 地表反射
+                    let term2 = Math.exp(-0.5 * Math.pow((z + H) / sigmaZ, 2));
                     
                     let C = coef * (term1 + term2);
 
-                    // 濃度轉化為顏色值 (常規化處理)
-                    // 這裡的乘數是用於視覺強化的經驗值
-                    let displayC = Math.min(C * 150000, 1.0); 
+                    // 更好的高低濃度色彩映射：使用開根號縮放，突顯低濃度邊緣
+                    let displayC = Math.pow(C * 40000, 0.6); 
+                    displayC = Math.min(displayC, 1.0); 
 
-                    // 取得陣列索引
                     let index = (py * canvas.width + px) * 4;
 
-                    if (displayC > 0.01) {
-                        // 熱力圖顏色計算 (藍 -> 綠 -> 黃 -> 紅)
-                        let h = (1.0 - displayC) * 240; // 色相 HSL
+                    if (displayC > 0.005) {
+                        // 色相 HSL：從 240(深藍) 過渡到 180(青) 到 120(綠) 到 60(黃) 到 0(紅)
+                        let h = (1.0 - displayC) * 240; 
                         let rgb = hslToRgb(h / 360, 1, 0.5);
                         
-                        data[index] = rgb[0];     // Red
-                        data[index + 1] = rgb[1]; // Green
-                        data[index + 2] = rgb[2]; // Blue
-                        data[index + 3] = Math.floor(displayC * 255); // Alpha (透明度)
+                        // 透明度平滑處理：核心不透明，邊緣漸層透明
+                        let alpha = Math.min(displayC * 2, 1.0);
+
+                        data[index] = rgb[0];     
+                        data[index + 1] = rgb[1]; 
+                        data[index + 2] = rgb[2]; 
+                        data[index + 3] = Math.floor(alpha * 255); 
                     }
                 }
             }
 
+            // 1. 繪製熱力圖
             ctx.putImageData(imgData, 0, 0);
-
-            // 畫出煙囪
+            
+            // 2. 繪製煙囪
             drawStack(H);
+
+            // 3. 繪製距離標尺 (Axes)
+            drawAxes();
         }
 
-        // 輔助函式：畫煙囪
         function drawStack(H) {
             let pxY = canvas.height - (H / maxDistZ) * canvas.height;
-            ctx.fillStyle = "#555";
-            // 煙囪畫在最左側，寬度 15px
-            ctx.fillRect(0, pxY, 15, canvas.height - pxY);
-            // 煙囪頂端紅色標記
-            ctx.fillStyle = "red";
-            ctx.fillRect(0, pxY, 15, 5);
+            // 煙囪本體
+            ctx.fillStyle = "#4a4a4a";
+            ctx.fillRect(40, pxY, 15, canvas.height - pxY);
+            // 煙囪排放口標記
+            ctx.fillStyle = "#e74c3c";
+            ctx.fillRect(40, pxY, 15, 6);
         }
 
-        // 輔助函式：HSL 轉 RGB (用於熱力圖)
+        function drawAxes() {
+            ctx.fillStyle = "#2c3e50";
+            ctx.strokeStyle = "rgba(44, 62, 80, 0.3)";
+            ctx.font = "bold 12px Arial";
+            ctx.textAlign = "center";
+
+            // X 軸 (下風處距離) - 每 500 公尺畫一條參考線與標示
+            for(let i = 500; i <= maxDistX; i += 500) {
+                let px = (i / maxDistX) * canvas.width;
+                
+                // 畫垂直輔助虛線
+                ctx.beginPath();
+                ctx.setLineDash([5, 5]);
+                ctx.moveTo(px, 0);
+                ctx.lineTo(px, canvas.height - 25);
+                ctx.stroke();
+
+                // 畫文字標籤 (避免與地面重疊)
+                ctx.fillText(i + " m", px, canvas.height - 30);
+            }
+
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            ctx.setLineDash([]); // 恢復實線
+
+            // Z 軸 (高度) - 每 100 公尺畫一條參考線與標示
+            for(let i = 100; i <= maxDistZ; i += 100) {
+                let py = canvas.height - (i / maxDistZ) * canvas.height;
+                
+                // 畫水平輔助線標記
+                ctx.beginPath();
+                ctx.moveTo(0, py);
+                ctx.lineTo(10, py);
+                ctx.stroke();
+
+                // 畫文字標籤
+                ctx.fillText(i + " m", 5, py - 10);
+            }
+        }
+
+        // HSL 轉 RGB
         function hslToRgb(h, s, l){
             var r, g, b;
             if(s == 0){
@@ -278,7 +308,6 @@
             return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
         }
 
-        // 事件監聽器：當滑桿或選單數值改變時，更新顯示文字並重繪
         const inputs = [windInput, stackHInput, rateInput, stabInput];
         inputs.forEach(input => {
             input.addEventListener('input', () => {
@@ -289,7 +318,7 @@
             });
         });
 
-        // 初始繪製
+        // 啟動首次渲染
         drawPlume();
     </script>
 </body>
